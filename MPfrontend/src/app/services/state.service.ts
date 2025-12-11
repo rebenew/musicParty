@@ -2,12 +2,8 @@ import { Injectable } from '@angular/core';
 import { BehaviorSubject, Observable } from 'rxjs';
 import { map, distinctUntilChanged } from 'rxjs/operators';
 
-export interface TrackEntry {
-  trackId: string;
-  title: string;
-  addedBy: string;
-  addedAt?: number; // Timestamp para ordenamiento
-}
+// ✅ IMPORTADO: Usar el tipo unificado de RoomService
+import { TrackEntry } from './room.service';
 
 export interface AppState {
   roomId: string | null;
