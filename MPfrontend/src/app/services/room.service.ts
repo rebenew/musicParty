@@ -2,22 +2,30 @@ import { Injectable } from '@angular/core';
 import { HttpClient, HttpErrorResponse, HttpHeaders } from '@angular/common/http';
 import { firstValueFrom, timeout } from 'rxjs';
 
-// Este es el metadata del RoomResponse en el backend
+// ✅ ACTUALIZADO: Coincide con RoomResponse DTO del backend
 export type RoomMetadata = {
   roomId: string;
-  hostSenderId: string | null;
-  allowGuestsEditQueue: boolean;  
-  clients: string[]; // Lista de senderIds conectados
+  hostSenderId: string;
+  allowGuestsAddTracks: boolean;
+  clients: string[];
   playlistSize: number;
 };
 
+// ✅ NUEVO: Coincide con PlaylistResponse DTO del backend
+export type PlaylistResponse = {
+  roomId: string;
+  playlist: TrackEntry[];
+  totalTracks: number;
+  nowPlayingIndex?: number;
+  nowPlaying?: TrackEntry;
+};
+
 // Representa una entrada de pista en la lista de reproducción
- 
 export type TrackEntry = {
   trackId: string;
   title: string;
   addedBy: string;
-  // addedAt fue omitido temporalmente, puede servir para una notificación popup futura
+  addedAt: number;
 };
 
 // Request para crear una sala
@@ -93,11 +101,14 @@ export class RoomService {
 
   async getPlaylist(roomId: string): Promise<TrackEntry[]> {
     if (!roomId) throw new Error('roomId required');
+
     try {
-      const obs = this.http.get<TrackEntry[]>(
+      // ✅ ACTUALIZADO: Espera PlaylistResponse y extrae la lista de tracks
+      const obs = this.http.get<PlaylistResponse>(
         `${this.baseUrl}/rooms/${encodeURIComponent(roomId)}/playlist`
       );
-      return await firstValueFrom(obs.pipe(timeout(this.defaultTimeout)));
+      const response = await firstValueFrom(obs.pipe(timeout(this.defaultTimeout)));
+      return response.playlist || []; // Devuelve solo el array de tracks
     } catch (err) {
       throw RoomService.toError(err, 'getPlaylist failed');
     }

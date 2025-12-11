@@ -58,31 +58,15 @@ export class WebsocketService {
       return;
     }
 
-    const url = `${this.baseUrl}?roomId=${encodeURIComponent(normalizedRoom)}&senderId=${encodeURIComponent(senderId)}`;
     this.status$.next('CONNECTING');
 
     try {
-      this.socket = new WebSocket(url);
+      this.socket = new WebSocket(this.baseUrl);
 
       this.socket.onopen = () => {
         this.reconnectAttempts = 0;
         this.ngZone.run(() => this.status$.next('OPEN'));
         
-        // ✅ CORREGIDO: Mensaje de autenticación con estructura SyncMsg estándar
-        const authMsg: SyncMsg = {
-          type: 'auth',
-          roomId: this.currentRoom,
-          senderId: this.currentSender,
-          timestamp: Date.now(),
-          correlationId: WebsocketService.genCorr(),
-          data: { isHost: false } // Default to false, orchestrator can update later or we can pass it in connect
-        };
-        
-        try { 
-          this.socket!.send(JSON.stringify(authMsg)); 
-        } catch (e) { 
-          console.warn('auth send failed', e); 
-        }
         
         // Vaciar cola de envío
         while (this.sendQueue.length && this.socket && this.socket.readyState === WebSocket.OPEN) {

@@ -4,9 +4,6 @@ import { CommonModule } from '@angular/common';
 import { Subscription, map, distinctUntilChanged, debounceTime, Subject } from 'rxjs';
 import { SyncOrchestratorService } from './services/sync-orchestrator.service';
 import { StateService } from './services/state.service';
-import { MessageHandlerService } from './services/message-handler.service';
-import { StorageService } from './services/storage-service';
-import { UserService } from './services/user-service';
 
 /**
  * Componente principal de la aplicación/extensión
@@ -23,9 +20,6 @@ export class AppComponent implements OnInit, OnDestroy {
   // ✅ SERVICIOS INYECTADOS
   private syncOrchestrator = inject(SyncOrchestratorService);
   private state = inject(StateService);
-  private messageHandler = inject(MessageHandlerService);
-  private storage = inject(StorageService);
-  private userService = inject(UserService);
   
   private subs: Subscription[] = [];
   private hostSettingsDebounce = new Subject<{control: boolean, edit: boolean}>();
@@ -54,8 +48,7 @@ export class AppComponent implements OnInit, OnDestroy {
   );
 
   ngOnInit(): void {
-    this.hydrateFromStorage();
-    this.syncWithBackground();
+    this.initializeUser();
     this.setupSubscriptions();
     this.setupHostSettingsDebounce();
   }
@@ -66,63 +59,11 @@ export class AppComponent implements OnInit, OnDestroy {
     this.syncOrchestrator.stop();
   }
 
-  /**
-   * Recupera estado persistido del storage
-   */
-  private hydrateFromStorage(): void {
-    this.role = this.storage.get<'host' | 'guest'>('role');
-    
-    // Auto-conectar si hay roomId persistido
-    const savedRoomId = this.storage.get<string>('roomId');
-    const senderId = this.userService.getSenderId();
-    
-    if (savedRoomId && senderId && this.role) {
-      this.attemptAutoConnect(savedRoomId, senderId);
-    }
-  }
-
-  /**
-   * Sincroniza con el script de fondo para obtener el estado real
-   */
-  private syncWithBackground(): void {
-    if (chrome && chrome.runtime) {
-      chrome.runtime.sendMessage({ type: 'getRoomState' }, (response) => {
-        if (response && response.success && response.room) {
-          console.log('Sincronizado con background:', response.room);
-          this.storage.set('roomId', response.room.roomId);
-          // Si el background dice que somos host (o estamos en sala y somos owner), actualizar
-          // Nota: getRoomState devuelve datos de la sala del servidor.
-          // Mejor pedir 'getState' al background que devuelve {roomId, senderId, isHost} local
-        }
-      });
-
-      // Pedir estado local de sesión al background
-      chrome.runtime.sendMessage({ type: 'getSessionState' }, (session) => {
-         if (session && session.roomId) {
-            console.log('Sesión restaurada de background:', session);
-            this.storage.set('roomId', session.roomId);
-            this.storage.set('role', session.isHost ? 'host' : 'guest');
-            this.role = session.isHost ? 'host' : 'guest';
-            
-            // Si no estamos conectados en UI pero background sí, reconectar orquestador
-            if (!this.state.snapshot.isConnected) {
-               this.syncOrchestrator.start(session.roomId, session.senderId);
-            }
-         }
-      });
-    }
-  }
 
   /**
    * Configura todas las suscripciones a observables
    */
   private setupSubscriptions(): void {
-    // Manejar mensajes del sistema
-    this.subs.push(
-      this.messageHandler.systemMessages.subscribe(msg => 
-        this.handleSystemMessage(msg)
-      )
-    );
 
     // Manejar errores de sincronización
     this.subs.push(
@@ -131,30 +72,6 @@ export class AppComponent implements OnInit, OnDestroy {
       )
     );
 
-    // Sincronizar estado de rol con StateService
-    this.subs.push(
-      this.state.state$.pipe(
-        map(s => s.isHost ? 'host' : (s.roomId ? 'guest' : null)),
-        distinctUntilChanged()
-      ).subscribe(role => {
-        this.role = role;
-        this.storage.set('role', role);
-      })
-    );
-
-    // Sincronizar permisos con storage
-    this.subs.push(
-      this.state.state$.pipe(
-        map(s => ({ 
-          allowControl: s.allowGuestsControl,
-          allowEdit: s.allowGuestsAddTracks 
-        })),
-        distinctUntilChanged()
-      ).subscribe(settings => {
-        this.storage.set('allowControl', settings.allowControl);
-        this.storage.set('allowEdit', settings.allowEdit);
-      })
-    );
   }
 
   /**
@@ -171,24 +88,14 @@ export class AppComponent implements OnInit, OnDestroy {
   }
 
   /**
-   * Intenta conexión automática al cargar
+   * Inicializa el senderId del usuario
    */
-  private async attemptAutoConnect(roomId: string, senderId: string): Promise<void> {
-    try {
-      if (this.role === 'host') {
-        // CAMBIO: Usar rejoin en lugar de create
-        await this.syncOrchestrator.hostRejoin(roomId, senderId);
-      } else {
-        await this.syncOrchestrator.guestJoin(roomId, senderId);
-      }
-    } catch (error) {
-      console.warn('Conexión automática fallida:', error);
-      // Si falla rejoin (sala no existe), limpiar para que el usuario pueda crear otra
-      if (this.role === 'host') {
-         this.disconnect(); 
-      }
-    }
+  private initializeUser(): void {
+    const senderId = localStorage.getItem('senderId') ?? crypto.randomUUID();
+    localStorage.setItem('senderId', senderId);
+    this.state.patch({ senderId });
   }
+
 
   // ✅ MÉTODOS PÚBLICOS
 
@@ -202,10 +109,13 @@ export class AppComponent implements OnInit, OnDestroy {
     this.lastError = undefined;
 
     try {
-      const senderId = this.userService.getSenderId();
+      const senderId = this.state.snapshot.senderId;
+      if (!senderId) {
+        this.setStatus('No se pudo obtener el senderId', 'error');
+        return;
+      }
       const result = await this.syncOrchestrator.hostCreateAndConnect(senderId);
       
-      this.storage.set('roomId', result.roomId);
       this.setRole('host');
 
       await this.copyToClipboard(result.roomId, 'Room ID');
@@ -231,10 +141,13 @@ export class AppComponent implements OnInit, OnDestroy {
     this.lastError = undefined;
 
     try {
-      const senderId = this.userService.getSenderId();
+      const senderId = this.state.snapshot.senderId;
+      if (!senderId) {
+        this.setStatus('No se pudo obtener el senderId', 'error');
+        return;
+      }
       await this.syncOrchestrator.guestJoin(roomId, senderId);
       
-      this.storage.set('roomId', roomId);
       this.setRole('guest');
       this.setStatus(`Unido a sala: ${roomId}`, 'info', 2500);
       
@@ -248,7 +161,6 @@ export class AppComponent implements OnInit, OnDestroy {
    */
   setRole(role: 'host' | 'guest' | null): void {
     this.role = role;
-    this.storage.set('role', role);
     this.lastError = undefined;
   }
 
@@ -348,71 +260,12 @@ export class AppComponent implements OnInit, OnDestroy {
   }
 
   /**
-   * Manejar mensajes del sistema
-   */
-  private handleSystemMessage(msg: any): void {
-    switch (msg.type) {
-      case 'roomClosed':
-        this.handleRoomClosed();
-        break;
-      case 'navigate':
-        window.open(msg.url, '_blank');
-        break;
-      case 'userUpdate':
-        console.log(`Usuario ${msg.subType}:`, msg.user);
-        break;
-    }
-  }
-
-  /**
-   * Manejar cierre de sala por host
-   */
-  private handleRoomClosed(): void {
-    this.setStatus('La sala fue cerrada por el host', 'error', 5000);
-    this.disconnect();
-  }
-
-  /**
    * Desconectar de la sala
    */
   disconnect(): void {
     this.syncOrchestrator.stop();
-    this.storage.remove('roomId');
     this.role = null;
     this.guestRoomId = ''; // Limpiar input
-  }
-
-  /**
-   * Reconectar a la sala
-   */
-  async reconnect(): Promise<void> {
-    const roomId = this.storage.get<string>('roomId');
-    const senderId = this.userService.getSenderId();
-
-    if (!roomId) {
-      this.setStatus('No hay sala para reconectar', 'error');
-      return;
-    }
-
-    try {
-      await this.syncOrchestrator.start(roomId, senderId);
-    } catch (error: any) {
-      this.setStatus(error.message || 'Error reconectando', 'error');
-    }
-  }
-
-  /**
-   * Copiar roomId al portapapeles
-   */
-  async copyRoomId(): Promise<void> {
-    const roomId = this.storage.get<string>('roomId');
-    
-    if (!roomId) {
-      this.setStatus('No hay Room ID para copiar', 'error');
-      return;
-    }
-
-    await this.copyToClipboard(roomId, 'Room ID');
   }
 
   /**
