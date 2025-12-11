@@ -24,13 +24,4 @@ public class AppConfig {
         return Executors.newScheduledThreadPool(2);
     }
 
-    //  Esencial para configuración WebSocket
-    @Bean
-    public ServletServerContainerFactoryBean createWebSocketContainer() {
-        ServletServerContainerFactoryBean container = new ServletServerContainerFactoryBean();
-        container.setMaxTextMessageBufferSize(8192);
-        container.setMaxBinaryMessageBufferSize(8192);
-        container.setMaxSessionIdleTimeout(300000L); // 5 minutos - BUEN VALOR
-        return container;
-    }
 }
