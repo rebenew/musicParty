@@ -2,7 +2,7 @@ package com.rebenew.musicParty.syncserver.controller;
 
 import com.rebenew.musicParty.syncserver.core.RoomSessionManager;
 import com.rebenew.musicParty.syncserver.model.*;
-
+import com.rebenew.musicParty.syncserver.service.PlaylistService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
@@ -26,9 +26,11 @@ public class RoomController {
 
     // ✅ ACTUALIZADO: Usar RoomSessionManager en lugar de RoomService
     private final RoomSessionManager sessionManager;
+    private final PlaylistService playlistService;
 
-    public RoomController(RoomSessionManager sessionManager) {
+    public RoomController(RoomSessionManager sessionManager, PlaylistService playlistService) {
         this.sessionManager = sessionManager;
+        this.playlistService = playlistService;
     }
 
     /**
@@ -47,10 +49,9 @@ public class RoomController {
         }
 
         try {
-            String roomId = UUID.randomUUID().toString().substring(0, 8); // ID más corto
-            sessionManager.createRoom(roomId, request.getSenderId());
-            logger.info("✅ Sala creada exitosamente: {} para host: {}", roomId, request.getSenderId());
-            return ResponseEntity.ok(Map.of("roomId", roomId));
+            RoomSession roomSession = sessionManager.createRoom(request.getSenderId());
+            logger.info("✅ Sala creada exitosamente: {} para host: {}", roomSession.getRoomId(), request.getSenderId());
+            return ResponseEntity.ok(Map.of("roomId", roomSession.getRoomId()));
         } catch (IllegalArgumentException e) {
             logger.warn("❌ Error de validación al crear sala: {}", e.getMessage());
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
@@ -155,7 +156,7 @@ public class RoomController {
      *         timestamp)
      */
     @GetMapping("/{roomId}/playlist")
-    public ResponseEntity<List<Map<String, Object>>> getPlaylist(@PathVariable String roomId) {
+    public ResponseEntity<PlaylistResponse> getPlaylist(@PathVariable String roomId) {
         logger.debug("🎵 Consultando playlist de sala: {}", roomId);
 
         if (roomId == null || roomId.trim().isEmpty()) {
@@ -168,11 +169,9 @@ public class RoomController {
             return ResponseEntity.notFound().build();
         }
 
-        List<TrackEntry> playlist = sessionManager.getPlaylistCopy(roomId);
+        List<TrackEntry> playlist = playlistService.getPlaylistCopy(roomId);
 
-        Map<String, Object> response = new HashMap<>();
-        response.put("roomId", roomId);
-        response.put("playlist", playlist.stream()
+        List<Map<String, Object>> playlistMap = playlist.stream()
                 .map(track -> {
                     Map<String, Object> trackMap = new HashMap<>();
                     trackMap.put("trackId", track.trackId());
@@ -181,13 +180,18 @@ public class RoomController {
                     trackMap.put("addedAt", track.addedAt());
                     return trackMap;
                 })
-                .collect(Collectors.toList()));
-        response.put("totalTracks", playlist.size());
-        response.put("nowPlayingIndex", session.getNowPlayingIndex());
-        response.put("nowPlaying", session.getNowPlayingTrack());
+                .collect(Collectors.toList());
+
+        PlaylistResponse response = new PlaylistResponse(
+                roomId,
+                playlistMap,
+                playlist.size(),
+                session.getNowPlayingIndex(),
+                session.getNowPlayingTrack()
+        );
 
         logger.debug("✅ Playlist de sala {} recuperada - {} tracks", roomId, playlist.size());
-        return ResponseEntity.ok(Collections.singletonList(response));
+        return ResponseEntity.ok(response);
     }
 
     /**

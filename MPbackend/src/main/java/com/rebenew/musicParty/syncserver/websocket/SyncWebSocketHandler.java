@@ -3,6 +3,8 @@ package com.rebenew.musicParty.syncserver.websocket;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rebenew.musicParty.syncserver.model.*;
 import com.rebenew.musicParty.syncserver.core.RoomSessionManager;
+import com.rebenew.musicParty.syncserver.service.PlaybackService;
+import com.rebenew.musicParty.syncserver.service.PlaylistService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -21,6 +23,8 @@ public class SyncWebSocketHandler extends TextWebSocketHandler {
     private static final Logger logger = LoggerFactory.getLogger(SyncWebSocketHandler.class);
 
     private final RoomSessionManager sessionManager;
+    private final PlaybackService playbackService;
+    private final PlaylistService playlistService;
     private final ObjectMapper objectMapper;
 
     // Configuración
@@ -32,8 +36,10 @@ public class SyncWebSocketHandler extends TextWebSocketHandler {
     private final ScheduledExecutorService sweeper = Executors.newSingleThreadScheduledExecutor();
 
     // ✅ CONSTRUCTOR SIMPLIFICADO
-    public SyncWebSocketHandler(RoomSessionManager sessionManager, ObjectMapper objectMapper) {
+    public SyncWebSocketHandler(RoomSessionManager sessionManager, PlaybackService playbackService, PlaylistService playlistService, ObjectMapper objectMapper) {
         this.sessionManager = sessionManager;
+        this.playbackService = playbackService;
+        this.playlistService = playlistService;
         this.objectMapper = objectMapper;
         startSweeper();
         logger.info("✅ SyncWebSocketHandler inicializado con servicios consolidados");
@@ -87,8 +93,13 @@ public class SyncWebSocketHandler extends TextWebSocketHandler {
         String correlationId = msg.getCorrelationId();
 
         if (type == null || roomId == null || senderId == null) {
-            // ✅ CORREGIDO: sessionManager.sendAck
             sessionManager.sendAck(session, false, "missing_required_fields", correlationId);
+            return;
+        }
+
+        UserSession userSession = getUserSession(session);
+        if (userSession != null && !validateSession(userSession, msg)) {
+            sessionManager.sendAck(session, false, "invalid_session", correlationId);
             return;
         }
 
@@ -116,17 +127,13 @@ public class SyncWebSocketHandler extends TextWebSocketHandler {
                     handleSystemEvent(session, msg);
                     break;
                 default:
-                    // ✅ CORREGIDO: sessionManager.sendAck
                     sessionManager.sendAck(session, false, "unknown_message_type", correlationId);
             }
         } catch (Exception e) {
-            logger.error("❌ Error procesando mensaje {}: {}", type, e.getMessage());
-            // ✅ CORREGIDO: sessionManager.sendAck
+            logger.error("❌ Error processing message {}: {}", type, e.getMessage());
             sessionManager.sendAck(session, false, "processing_error", correlationId);
         }
 
-        // ✅ CORREGIDO: Registrar actividad usando sessionManager
-        UserSession userSession = getUserSession(session);
         if (userSession != null) {
             sessionManager.recordActivity(userSession.roomId, userSession.senderId, userSession.isHost);
         }
@@ -220,16 +227,16 @@ public class SyncWebSocketHandler extends TextWebSocketHandler {
         if ("play".equals(subType)) {
             Integer trackIndex = data != null ? (Integer) data.get("trackIndex") : null;
             Long positionMs = data != null ? ((Number) data.getOrDefault("positionMs", 0L)).longValue() : 0L;
-            success = sessionManager.play(roomId, senderId, trackIndex, positionMs);
+            success = playbackService.play(roomId, senderId, trackIndex, positionMs);
         } else if ("pause".equals(subType)) {
-            success = sessionManager.pause(roomId, senderId);
+            success = playbackService.pause(roomId, senderId);
         } else if ("next".equals(subType)) {
-            success = sessionManager.nextTrack(roomId, senderId);
+            success = playbackService.nextTrack(roomId, senderId);
         } else if ("previous".equals(subType)) {
-            success = sessionManager.previousTrack(roomId, senderId);
+            success = playbackService.previousTrack(roomId, senderId);
         } else if ("seek".equals(subType)) {
             Long positionMs = data != null ? ((Number) data.getOrDefault("positionMs", 0L)).longValue() : 0L;
-            success = sessionManager.seek(roomId, senderId, positionMs);
+            success = playbackService.seek(roomId, senderId, positionMs);
         } else if ("syncState".equals(subType)) {
             // Sincronización completa de estado (para hosts que reconectan o inicializan)
             Integer trackIndex = data != null ? (Integer) data.get("trackIndex") : null;
@@ -237,11 +244,11 @@ public class SyncWebSocketHandler extends TextWebSocketHandler {
             boolean isPlaying = data != null && Boolean.TRUE.equals(data.get("isPlaying"));
 
             if (isPlaying) {
-                success = sessionManager.play(roomId, senderId, trackIndex, positionMs);
+                success = playbackService.play(roomId, senderId, trackIndex, positionMs);
             } else {
-                success = sessionManager.pause(roomId, senderId);
+                success = playbackService.pause(roomId, senderId);
                 if (positionMs > 0)
-                    sessionManager.seek(roomId, senderId, positionMs);
+                    playbackService.seek(roomId, senderId, positionMs);
             }
         } else {
             sessionManager.sendAck(session, false, "unknown_subtype", correlationId);
@@ -293,7 +300,7 @@ public class SyncWebSocketHandler extends TextWebSocketHandler {
                         }
                     }
                 }
-                success = sessionManager.replacePlaylist(roomId, newTracks, senderId);
+                success = playlistService.replacePlaylist(roomId, newTracks, senderId);
             }
         } else if ("add".equals(subType)) {
             if (data != null) {
@@ -304,19 +311,19 @@ public class SyncWebSocketHandler extends TextWebSocketHandler {
                 Long durationMs = data.get("durationMs") != null ? ((Number) data.get("durationMs")).longValue() : 0L;
 
                 if (trackId != null) {
-                    success = sessionManager.addTrack(roomId, trackId, title, senderId, durationMs);
+                    success = playlistService.addTrack(roomId, trackId, title, senderId, durationMs);
                 }
             }
         } else if ("remove".equals(subType)) {
             Integer index = data != null ? (Integer) data.get("trackIndex") : null;
             if (index != null) {
-                success = sessionManager.removeTrack(roomId, index, senderId);
+                success = playlistService.removeTrack(roomId, index, senderId);
             }
         } else if ("move".equals(subType)) {
             Integer from = data != null ? (Integer) data.get("fromIndex") : null;
             Integer to = data != null ? (Integer) data.get("toIndex") : null;
             if (from != null && to != null) {
-                success = sessionManager.moveTrack(roomId, from, to, senderId);
+                success = playlistService.moveTrack(roomId, from, to, senderId);
             }
         }
 
@@ -384,30 +391,28 @@ public class SyncWebSocketHandler extends TextWebSocketHandler {
      */
     private boolean validateSession(UserSession userSession, SyncMsg msg) {
         if (userSession == null) {
-            logger.warn("❌ Sesión inválida: UserSession es null para sesión {}", msg.getSenderId());
-            return true;
+            logger.warn("❌ Invalid session: UserSession is null for session {}", msg.getSenderId());
+            return false;
         }
         if (userSession.roomId == null) {
-            logger.warn("❌ Sesión inválida: roomId es null en UserSession");
-            return true;
+            logger.warn("❌ Invalid session: roomId is null in UserSession");
+            return false;
         }
         if (!userSession.roomId.equals(msg.getRoomId())) {
-            logger.warn("❌ Sesión inválida: Mismatch roomId. Session: {} vs Msg: {}", userSession.roomId,
+            logger.warn("❌ Invalid session: Mismatch roomId. Session: {} vs Msg: {}", userSession.roomId,
                     msg.getRoomId());
-            return true;
+            return false;
         }
-        // SenderId mismatch is common if valid, so we trust session over msg? No, msg
-        // senderId MUST match session.
         if (userSession.senderId == null) {
-            logger.warn("❌ Sesión inválida: senderId es null en UserSession");
-            return true;
+            logger.warn("❌ Invalid session: senderId is null in UserSession");
+            return false;
         }
         if (!userSession.senderId.equals(msg.getSenderId())) {
-            logger.warn("❌ Sesión inválida: Mismatch senderId. Session: {} vs Msg: {}", userSession.senderId,
+            logger.warn("❌ Invalid session: Mismatch senderId. Session: {} vs Msg: {}", userSession.senderId,
                     msg.getSenderId());
-            return true;
+            return false;
         }
-        return false;
+        return true;
     }
 
     // ==================== LIMPIEZA DE SESIONES INACTIVAS ====================

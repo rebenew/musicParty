@@ -2,7 +2,6 @@ package com.rebenew.musicParty.syncserver.core;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rebenew.musicParty.syncserver.model.*;
-import com.rebenew.musicParty.syncserver.service.RoomHealthSystem;
 import jakarta.annotation.PostConstruct;
 import lombok.Getter;
 import org.slf4j.Logger;
@@ -57,9 +56,9 @@ public class RoomSessionManager implements RoomSession.RoomEventListener {
     // ====================
     // CREACIÓN DE SALAS
     // ====================
-    public RoomSession createRoom(String roomId, String hostUserId) {
-        validateRoomId(roomId);
+    public RoomSession createRoom(String hostUserId) {
         validateUserId(hostUserId);
+        String roomId = UUID.randomUUID().toString().substring(0, 8);
 
         if (sessions.containsKey(roomId)) {
             logger.warn("Intento de crear sala existente: {}", roomId);
@@ -209,295 +208,7 @@ public class RoomSessionManager implements RoomSession.RoomEventListener {
         return hostIdleMs <= HOST_TIMEOUT_MS;
     }
 
-    // ==================== GESTIÓN DE REPRODUCCIÓN ====================
 
-    // Inicia o reanuda la reproducción en una sala
-    public boolean play(String roomId, String userId, Integer trackIndex, Long positionMs) {
-        RoomSession session = sessions.get(roomId);
-        if (session == null) {
-            logger.warn("Intento de reproducir en sala inexistente: {}", roomId);
-            return false;
-        }
-
-        if (!session.canUserControlPlayback(userId)) {
-            logger.warn("Usuario {} sin permisos para reproducir en sala: {}", userId, roomId);
-            return false;
-        }
-
-        boolean success = session.play(userId, trackIndex, positionMs);
-        if (success) {
-            long actualPosition = positionMs != null ? positionMs : session.getCurrentPlaybackPosition();
-
-            broadcastPlaybackState(session, "play", actualPosition);
-            logger.info("▶️ Reproducción iniciada en sala {} por {} (track: {}, position: {}ms)",
-                    roomId, userId, session.getNowPlayingIndex(), actualPosition);
-        }
-        return success;
-    }
-
-    // Pausa la reproducción en una sala
-    public boolean pause(String roomId, String userId) {
-        RoomSession session = sessions.get(roomId);
-        if (session == null) {
-            logger.warn("Intento de pausar en sala inexistente: {}", roomId);
-            return false;
-        }
-
-        if (!session.canUserControlPlayback(userId)) {
-            logger.warn("Usuario {} sin permisos para pausar en sala: {}", userId, roomId);
-            return false;
-        }
-
-        boolean success = session.pause(userId);
-        if (success) {
-            long currentPosition = session.getCurrentPlaybackPosition();
-            broadcastPlaybackState(session, "pause", currentPosition);
-            logger.info("⏸️ Reproducción pausada en sala {} por {} (position: {}ms)",
-                    roomId, userId, currentPosition);
-        }
-        return success;
-    }
-
-    // Salta al siguiente track en la playlist
-    public boolean nextTrack(String roomId, String userId) {
-        RoomSession session = sessions.get(roomId);
-        if (session == null) {
-            logger.warn("Intento de siguiente track en sala inexistente: {}", roomId);
-            return false;
-        }
-
-        if (!session.canUserControlPlayback(userId)) {
-            logger.warn("Usuario {} sin permisos para siguiente track en sala: {}", userId, roomId);
-            return false;
-        }
-
-        boolean success = session.nextTrack(userId);
-        if (success) {
-            broadcastPlaybackState(session, "play", 0L);
-            logger.info("⏭️ Siguiente track en sala {} por {} (nuevo track: {})",
-                    roomId, userId, session.getNowPlayingIndex());
-        }
-        return success;
-    }
-
-    // Regresa al track anterior en la playlist
-    public boolean previousTrack(String roomId, String userId) {
-        RoomSession session = sessions.get(roomId);
-        if (session == null) {
-            logger.warn("Intento de track anterior en sala inexistente: {}", roomId);
-            return false;
-        }
-
-        if (!session.canUserControlPlayback(userId)) {
-            logger.warn("Usuario {} sin permisos para track anterior en sala: {}", userId, roomId);
-            return false;
-        }
-
-        boolean success = session.previousTrack(userId);
-        if (success) {
-            broadcastPlaybackState(session, "play", 0L);
-            logger.info("⏮️ Track anterior en sala {} por {} (nuevo track: {})",
-                    roomId, userId, session.getNowPlayingIndex());
-        }
-        return success;
-    }
-
-    // Busca una posición específica en el track actual
-    public boolean seek(String roomId, String userId, long positionMs) {
-        RoomSession session = sessions.get(roomId);
-        if (session == null) {
-            logger.warn("Intento de seek en sala inexistente: {}", roomId);
-            return false;
-        }
-
-        if (!session.canUserControlPlayback(userId)) {
-            logger.warn("Usuario {} sin permisos para seek en sala: {}", userId, roomId);
-            return false;
-        }
-
-        boolean success = session.seek(userId, positionMs);
-        if (success) {
-            broadcastPlaybackState(session, "seek", positionMs);
-            logger.info("🔍 Seek en sala {} por {} a {}ms", roomId, userId, positionMs);
-        }
-        return success;
-    }
-
-    // ==================== GESTIÓN DE PLAYLIST ====================
-
-    // Añade un track a la playlist de una sala
-    public boolean addTrack(String roomId, String trackId, String title, String addedBy) {
-        return addTrack(roomId, trackId, title, addedBy, 0L);
-    }
-
-    public boolean addTrack(String roomId, String trackId, String title, String addedBy, long durationMs) {
-        RoomSession session = sessions.get(roomId);
-        if (session == null) {
-            logger.warn("Intento de añadir track a sala inexistente: {}", roomId);
-            return false;
-        }
-        if (!session.canUserModifyPlaylist(addedBy)) {
-            logger.warn("Usuario {} sin permisos para añadir tracks en sala: {}", addedBy, roomId);
-            return false;
-        }
-
-        TrackEntry track = new TrackEntry(trackId, title != null ? title : "Unknown Track", addedBy,
-                System.currentTimeMillis(), durationMs);
-        boolean success = session.addTrack(track, addedBy);
-        if (success) {
-            broadcastPlaylistUpdate(session, "add", track, null, null);
-            logger.debug("🎵 Track añadido a sala {}: '{}' por {}", roomId, title, addedBy);
-            lastActivityMap.put(roomId, session.getLastActivityAt());
-        }
-        return success;
-    }
-
-    public boolean replacePlaylist(String roomId, List<TrackEntry> newTracks, String sourceUserId) {
-        RoomSession session = sessions.get(roomId);
-        if (session == null)
-            return false;
-
-        boolean success = session.replacePlaylist(newTracks, sourceUserId);
-        if (success) {
-            // Enviamos un evento 'full_sync' o 'replace' de playlist
-            // Reutilizamos broadcastPlaylistUpdate o creamos uno nuevo específico
-            // Para simplicidad, enviamos un mensaje 'full_state' o 'playlist_replaced'
-            // Pero broadcastPlaylistUpdate espera "add/remove/move"
-            // Mejor enviamos 'full_state' parcial o un nuevo subtipo 'sync_queue'
-
-            Map<String, Object> data = new HashMap<>();
-            data.put("tracks", newTracks);
-            broadcastSystemMessage(session, "playlist_sync", data, sourceUserId);
-
-            logger.debug("🔄 Playlist sincronizada en sala {} ({} tracks) por {}", roomId, newTracks.size(),
-                    sourceUserId);
-            lastActivityMap.put(roomId, session.getLastActivityAt());
-        }
-        return success;
-    }
-
-    // Reenvía la petición de agregar track al host para que lo gestione nativamente
-   // 1. Método corregido usando la nueva sintaxis de SyncMsg
-    public void forwardAddRequestToHost(String roomId, String trackId, String title, String requestedBy) {
-        RoomSession session = sessions.get(roomId);
-        if (session == null)
-            return;
-
-        Map<String, Object> payload = new HashMap<>();
-        payload.put("trackId", trackId);
-        payload.put("title", title);
-        payload.put("requestedBy", requestedBy);
-
-        // CORRECCIÓN 1: Usamos SyncMsg.system(...) en lugar de createSystemMessage
-        // La firma es: system(subType, roomId, data)
-        SyncMsg msg = SyncMsg.system("add_track_request", roomId, payload);
-        msg.setSenderId("server"); // Opcional: marcamos que lo envía el servidor
-
-        WebSocketSession hostSession = session.getHostSession();
-        
-        // Verificamos que hostSession no sea null y esté abierto
-        if (hostSession != null && hostSession.isOpen()) {
-            sendMessage(hostSession, msg); // Ahora llamamos al helper creado abajo
-        } else {
-            // Opcional: Log si no hay host disponible
-            logger.warn("No se pudo reenviar track request: Host no disponible en sala " + roomId);
-        }
-    }
-
-    // 2. Método Helper necesario (Agrégalo al final de tu clase RoomSessionManager)
-    private void sendMessage(WebSocketSession session, SyncMsg msg) {
-        try {
-            if (session.isOpen()) {
-                // Necesitas Jackson ObjectMapper. 
-                // Si ya tienes un campo 'objectMapper' en la clase, úsalo. Si no, instancia uno aquí:
-                com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
-                
-                String json = mapper.writeValueAsString(msg);
-                session.sendMessage(new org.springframework.web.socket.TextMessage(json));
-            }
-        } catch (Exception e) {
-            logger.error("Error enviando mensaje directo a sesión " + session.getId(), e);
-        }
-    }
-
-    // Obtiene una copia segura de la playlist
-    public List<TrackEntry> getPlaylistCopy(String roomId) {
-        RoomSession session = sessions.get(roomId);
-        if (session == null)
-            return Collections.emptyList();
-        return new ArrayList<>(session.getPlaylist());
-    }
-
-    // Remueve un track de la playlist
-    public boolean removeTrack(String roomId, int trackIndex, String removerUserId) {
-        RoomSession session = sessions.get(roomId);
-        if (session == null) {
-            logger.warn("Intento de remover track de sala inexistente: {}", roomId);
-            return false;
-        }
-        if (!session.canUserModifyPlaylist(removerUserId)) {
-            logger.warn("Usuario {} sin permisos para remover tracks en sala: {}", removerUserId, roomId);
-            return false;
-        }
-        if (trackIndex < 0 || trackIndex >= session.getPlaylistSize()) {
-            logger.warn("Índice inválido al remover track: {} en sala {}", trackIndex, roomId);
-            return false;
-        }
-        TrackEntry removedTrack = session.getPlaylist().get(trackIndex);
-        boolean success = session.removeTrack(trackIndex, removerUserId);
-        if (success) {
-            broadcastPlaylistUpdate(session, "remove", removedTrack, trackIndex, null);
-            logger.debug("🗑️ Track removido de sala {}: índice {} por {}", roomId, trackIndex, removerUserId);
-            lastActivityMap.put(roomId, session.getLastActivityAt());
-        }
-        return success;
-    }
-
-    // Mueve un track de una posición a otra en la playlist
-    public boolean moveTrack(String roomId, int fromIndex, int toIndex, String moverUserId) {
-        RoomSession session = sessions.get(roomId);
-        if (session == null) {
-            logger.warn("Intento de mover track en sala inexistente: {}", roomId);
-            return false;
-        }
-        if (!session.canUserModifyPlaylist(moverUserId)) {
-            logger.warn("Usuario {} sin permisos para mover tracks en sala: {}", moverUserId, roomId);
-            return false;
-        }
-        if (fromIndex < 0 || fromIndex >= session.getPlaylistSize() ||
-                toIndex < 0 || toIndex >= session.getPlaylistSize()) {
-            logger.warn("Índices inválidos para mover track: {} -> {} en sala {}", fromIndex, toIndex, roomId);
-            return false;
-        }
-        TrackEntry movedTrack = session.getPlaylist().get(fromIndex);
-        boolean success = session.moveTrack(fromIndex, toIndex, moverUserId);
-        if (success) {
-            broadcastPlaylistUpdate(session, "move", movedTrack, fromIndex, toIndex);
-            logger.debug("🔀 Track movido en sala {}: de {} a {} por {}", roomId, fromIndex, toIndex, moverUserId);
-            lastActivityMap.put(roomId, session.getLastActivityAt());
-        }
-        return success;
-    }
-
-    // Limpia toda la playlist (solo host)
-    public boolean clearPlaylist(String roomId, String clearerUserId) {
-        RoomSession session = sessions.get(roomId);
-        if (session == null) {
-            logger.warn("Intento de limpiar playlist de sala inexistente: {}", roomId);
-            return false;
-        }
-        if (!session.isHost(clearerUserId)) {
-            logger.warn("Usuario {} sin permisos para limpiar playlist en sala: {}", clearerUserId, roomId);
-            return false;
-        }
-        boolean success = session.clearPlaylist(clearerUserId);
-        if (success) {
-            broadcastSystemMessage(session, "playlist_cleared", Map.of("clearedBy", clearerUserId), null);
-            logger.info("🧹 Playlist limpiada en sala {} por {}", roomId, clearerUserId);
-            lastActivityMap.put(roomId, session.getLastActivityAt());
-        }
-        return success;
-    }
 
     // ==================== CONFIGURACIÓN Y PERMISOS ====================
 
@@ -607,7 +318,6 @@ public class RoomSessionManager implements RoomSession.RoomEventListener {
             RoomSession session = sessions.get(roomId);
             if (session != null && session.isHostDisconnected(HOST_TIMEOUT_MS)) {
                 logger.warn("💀 Sala expirada por host inactivo: {}", roomId);
-                publisher.publishEvent(RoomHealthSystem.Event.roomExpired(this, roomId));
                 deleteRoom(roomId, "health_system");
             }
         }, RECONNECTION_WINDOW_MS, TimeUnit.MILLISECONDS);
@@ -632,7 +342,6 @@ public class RoomSessionManager implements RoomSession.RoomEventListener {
                 if (hostTimedOut) {
                     if (markHealthFail(roomId)) {
                         logger.warn("👑 Timeout del host detectado para sala: {} ({}ms)", roomId, hostIdleMs);
-                        publisher.publishEvent(RoomHealthSystem.Event.hostDisconnected(this, roomId));
                         scheduleHostExpiration(roomId);
                     }
                     continue;
@@ -643,7 +352,6 @@ public class RoomSessionManager implements RoomSession.RoomEventListener {
                     if (roomExpired) {
                         if (markHealthFail(roomId)) {
                             logger.warn("💀 Sala expirada por inactividad: {} ({}ms)", roomId, inactivityMs);
-                            publisher.publishEvent(RoomHealthSystem.Event.roomExpired(this, roomId));
                         }
                         deleteRoom(roomId, "health_system");
                         continue;
@@ -651,7 +359,6 @@ public class RoomSessionManager implements RoomSession.RoomEventListener {
                 }
 
                 if (markHealthPass(roomId)) {
-                    publisher.publishEvent(RoomHealthSystem.Event.healthCheckPassed(this, roomId));
                 }
             }
         } catch (Exception ex) {
@@ -664,7 +371,6 @@ public class RoomSessionManager implements RoomSession.RoomEventListener {
         RoomSession session = sessions.get(roomId);
         if (session == null) {
             logger.warn("❌ Sala no encontrada en health check puntual: {}", roomId);
-            publisher.publishEvent(RoomHealthSystem.Event.healthCheckFailed(this, roomId));
             return;
         }
         Instant lastActivity = lastActivityMap.getOrDefault(roomId, session.getLastActivityAt());
@@ -675,17 +381,14 @@ public class RoomSessionManager implements RoomSession.RoomEventListener {
         if (isHost && hostIdleMs > HOST_TIMEOUT_MS) {
             if (markHealthFail(roomId)) {
                 logger.warn("👑 Host timeout en healthCheck puntual para sala {} ({}ms)", roomId, hostIdleMs);
-                publisher.publishEvent(RoomHealthSystem.Event.hostDisconnected(this, roomId));
                 scheduleHostExpiration(roomId);
             }
         } else if (inactivityMs > RECONNECTION_WINDOW_MS) {
             if (markHealthFail(roomId)) {
                 logger.warn("💀 Sala expirada en healthCheck puntual: {} ({}ms)", roomId, inactivityMs);
-                publisher.publishEvent(RoomHealthSystem.Event.roomExpired(this, roomId));
             }
         } else {
             if (markHealthPass(roomId)) {
-                publisher.publishEvent(RoomHealthSystem.Event.healthCheckPassed(this, roomId));
             }
         }
     }
@@ -751,76 +454,6 @@ public class RoomSessionManager implements RoomSession.RoomEventListener {
         return prev == null || !prev;
     }
 
-    // ==================== HANDLERS DE EVENTOS DE SALUD ====================
-    // Maneja eventos de salud de salas
-    @EventListener
-    public void handleRoomHealthEvent(RoomHealthSystem.Event event) {
-        logger.info("🎯 RoomSessionManager procesando health event: {} for room: {}",
-                event.getAction(), event.getRoomId());
-
-        RoomSession session = getSession(event.getRoomId());
-        if (session == null) {
-            logger.warn("Room no encontrado para health event: {}", event.getRoomId());
-            return;
-        }
-
-        switch (event.getAction()) {
-            case HOST_DISCONNECTED:
-                handleHostDisconnected(event, session);
-                break;
-            case ROOM_EXPIRED:
-                handleRoomExpired(event, session);
-                break;
-            case HEALTH_CHECK_FAIL:
-                handleHealthCheckFail(event, session);
-                break;
-            case HOST_RECONNECTED:
-                handleHostReconnected(event, session);
-                break;
-            case HEALTH_CHECK_PASS:
-                handleHealthCheckPass(event, session);
-                break;
-            default:
-                logger.warn("❓ RoomHealthAction desconocido: {}", event.getAction());
-        }
-    }
-
-    // Maneja desconexión de Host
-    private void handleHostDisconnected(RoomHealthSystem.Event event, RoomSession session) {
-        session.setState(RoomState.HOST_DISCONNECTED);
-        session.setHostDisconnected(true);
-        broadcastSystemMessage(session, "host_disconnected",
-                Map.of("hostId", session.getHostUserId(), "reason", "health_check"), null);
-        logger.warn("👑 Host desconectado via health check: {}", session.getRoomId());
-    }
-
-    // Maneja expiración de Room
-    private void handleRoomExpired(RoomHealthSystem.Event event, RoomSession session) {
-        broadcastSystemMessage(session, "room_expired", Map.of("reason", "Health check timeout"), null);
-        deleteRoom(event.getRoomId(), "health_system");
-        logger.warn("💀 Room expirado via health check: {}", session.getRoomId());
-    }
-
-    // Maneja reconexión de Host
-    private void handleHostReconnected(RoomHealthSystem.Event event, RoomSession session) {
-        session.setState(RoomState.ACTIVE);
-        session.updateHostActivity();
-        session.setHostDisconnected(false);
-        broadcastSystemMessage(session, "host_reconnected", Map.of("hostId", session.getHostUserId()), null);
-        logger.info("✅ Host reconectado via health check: {}", session.getRoomId());
-    }
-
-    // Maneja fallo de HealthCheck
-    private void handleHealthCheckFail(RoomHealthSystem.Event event, RoomSession session) {
-        logger.warn("❌ Health check falló para room: {}", session.getRoomId());
-        broadcastSystemMessage(session, "health_warning", Map.of("message", "Connection issues detected"), null);
-    }
-
-    // Maneja aprovación de HealthCheck
-    private void handleHealthCheckPass(RoomHealthSystem.Event event, RoomSession session) {
-        logger.debug("✅ Health check aprovado para room: {}", session.getRoomId());
-        session.setFailedHeartbeats(0);
-    }
 
     // ==================== IMPLEMENTACIÓN ROOM EVENT LISTENER ====================
 
