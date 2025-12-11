@@ -1,0 +1,53 @@
+{
+  "name": "music-party",
+  "version": "0.0.0",
+  "scripts": {
+    "ng": "ng",
+    "start": "ng serve",
+    "clean": "rimraf dist",
+    "build": "ng build --configuration=production",
+    "prepare:dist": "npm run clean && npm run build",
+    "fix:base": "node scripts/fix-base-href.js",
+    "assemble:ext": "node scripts/assemble-extension.js",
+    "build:extension": "npm run prepare:dist && npm run fix:base && npm run assemble:ext"
+  },
+  "private": true,
+  "dependencies": {
+    "@angular/animations": "^19.1.0",
+    "@angular/common": "^19.1.0",
+    "@angular/compiler": "^19.1.0",
+    "@angular/core": "^19.1.0",
+    "@angular/forms": "^19.1.0",
+    "@angular/platform-browser": "^19.1.0",
+    "@angular/platform-browser-dynamic": "^19.1.0",
+    "@angular/router": "^19.1.0",
+    "lru-cache": "11.2.2",
+    "rxjs": "~7.8.0",
+    "tslib": "^2.3.0",
+    "ws": "^8.18.3",
+    "zone.js": "~0.15.0"
+  },
+  "devDependencies": {
+    "@angular-devkit/build-angular": "^19.1.6",
+    "@angular/cli": "^19.1.6",
+    "@angular/compiler-cli": "^19.1.0",
+    "@types/chrome": "^0.1.27",
+    "@types/jasmine": "~5.1.0",
+    "chrome-types": "^0.1.387",
+    "copyfiles": "^2.4.1",
+    "jasmine-core": "~5.5.0",
+    "karma": "~6.4.0",
+    "karma-chrome-launcher": "~3.2.0",
+    "karma-coverage": "~2.2.0",
+    "karma-jasmine": "~5.1.0",
+    "karma-jasmine-html-reporter": "~2.1.0",
+    "rimraf": "^6.1.0",
+    "typescript": "~5.7.2"
+  },
+  "description": "This project was generated using [Angular CLI](https://github.com/angular/angular-cli) version 19.1.6.",
+  "main": "index.js",
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs"
+}

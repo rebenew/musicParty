@@ -1,0 +1,186 @@
+<div class="app-container">
+  <!-- Header -->
+  <header class="app-header">
+    <h1>🎵 Music Party Sync</h1>
+    <div class="connection-status" [class.connected]="(isConnected$ | async)">
+      {{ (isConnected$ | async) ? '🟢 Conectado' : '🔴 Desconectado' }}
+    </div>
+  </header>
+
+  <!-- Estado de error -->
+  <div class="error-message" *ngIf="lastError" [class.error]="lastError">
+    {{ lastError }}
+  </div>
+
+  <!-- Contenido principal -->
+  <main class="main-content">
+    <!-- Estado: Sin sala -->
+    <section *ngIf="!role" class="no-room-section">
+      <!-- Crear sala -->
+      <div class="create-room card">
+        <h2>Crear Nueva Sala</h2>
+        <p>Crea una nueva sala de sincronización musical</p>
+        <button 
+          (click)="createRoom()" 
+          [disabled]="creatingRoom"
+          class="btn btn-primary"
+        >
+          {{ creatingRoom ? '🔄 Creando...' : '🎵 Crear Sala' }}
+        </button>
+      </div>
+
+      <!-- Unirse a sala -->
+      <div class="join-room card">
+        <h2>Unirse a Sala Existente</h2>
+        <p>Ingresa el Room ID para unirte a una sala</p>
+        <div class="join-form">
+          <input 
+            [(ngModel)]="guestRoomId" 
+            placeholder="Pega el Room ID aquí" 
+            class="form-input"
+            (keyup.enter)="joinRoom()"
+          />
+          <button 
+            (click)="joinRoom()" 
+            [disabled]="!guestRoomId"
+            class="btn btn-secondary"
+          >
+            Unirse
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Estado: Sala activa -->
+    <section *ngIf="role" class="active-room-section">
+      <!-- Información de sala -->
+      <div class="room-info card">
+        <h2>Sala Activa</h2>
+        <div class="room-details">
+          <div class="detail-item">
+            <strong>Room ID:</strong> 
+            <span class="room-id">{{ (roomId$ | async) }}</span>
+          </div>
+          <div class="detail-item">
+            <strong>Rol:</strong> 
+            <span [class.host]="role === 'host'" [class.guest]="role === 'guest'">
+              {{ role === 'host' ? '👑 Host' : '👤 Invitado' }}
+            </span>
+          </div>
+        </div>
+        
+        <div class="room-actions">
+          <button (click)="copyRoomId()" class="btn btn-outline">
+            📋 Copiar Room ID
+          </button>
+          <button (click)="disconnect()" class="btn btn-danger">
+            🚪 Salir de la Sala
+          </button>
+        </div>
+      </div>
+
+      <!-- Configuración del host -->
+      <div *ngIf="role === 'host'" class="host-controls card">
+        <h3>Configuración del Host</h3>
+        <div class="settings-grid">
+          <label class="setting-toggle">
+            <input 
+              type="checkbox"
+              [checked]="(state.state$ | async)?.allowGuestsControl"
+              (change)="onToggleAllowGuestsControl($event)"
+            />
+            <span class="toggle-label">
+              <strong>Permitir control de reproducción</strong>
+              <small>Los invitados pueden pausar/reproducir</small>
+            </span>
+          </label>
+          
+          <label class="setting-toggle">
+            <input 
+              type="checkbox"
+              [checked]="(state.state$ | async)?.allowGuestsAddTracks"
+              (change)="onToggleAllowGuestsEdit($event)"
+            />
+            <span class="toggle-label">
+              <strong>Permitir añadir canciones</strong>
+              <small>Los invitados pueden agregar a la playlist</small>
+            </span>
+          </label>
+        </div>
+      </div>
+
+      <!-- Controles de reproducción -->
+      <div *ngIf="(isConnected$ | async)" class="playback-controls card">
+        <h3>Control de Reproducción</h3>
+        <div class="controls-grid">
+          <button 
+            (click)="togglePlay()" 
+            [disabled]="!(canControlPlayback$ | async)"
+            class="btn btn-play"
+          >
+            {{ (currentTrack$ | async)?.isPlaying ? '⏸️ Pausar' : '▶️ Reproducir' }}
+          </button>
+          <button 
+            (click)="sendSeek()" 
+            [disabled]="!(canControlPlayback$ | async)"
+            class="btn btn-seek"
+          >
+            ⏩ Buscar
+          </button>
+        </div>
+        
+        <!-- Track actual -->
+        <div *ngIf="(currentTrack$ | async) as currentTrack" class="current-track">
+          <h4>Reproduciendo ahora:</h4>
+          <p class="track-title">{{ currentTrack.title }}</p>
+          <p *ngIf="currentTrack.artist" class="track-artist">{{ currentTrack.artist }}</p>
+        </div>
+      </div>
+
+      <!-- Añadir track -->
+      <div *ngIf="(canAddTracks$ | async)" class="add-track card">
+        <h3>Añadir Canción</h3>
+        <div class="track-form">
+          <input #trackIdInput placeholder="ID del Track (ej: ABC123)" class="form-input">
+          <input #titleInput placeholder="Título de la canción" class="form-input">
+          <button 
+            (click)="onAddTrack(trackIdInput.value, titleInput.value)"
+            class="btn btn-success"
+          >
+            ➕ Añadir a Playlist
+          </button>
+        </div>
+      </div>
+
+      <!-- Playlist -->
+      <div class="playlist-section card">
+        <div class="playlist-header">
+          <h3>Playlist de la Sala</h3>
+          <div class="playlist-actions">
+            <span class="track-count">
+              {{ (playlist$ | async)?.length || 0 }} canciones
+            </span>
+            <button (click)="refreshPlaylist()" class="btn btn-outline">
+              🔄 Actualizar
+            </button>
+          </div>
+        </div>
+        
+        <ul class="playlist" *ngIf="(playlist$ | async) as playlist">
+          <li *ngFor="let track of playlist; let i = index" class="track-item">
+            <span class="track-number">{{ i + 1 }}.</span>
+            <span class="track-title">{{ track.title }}</span>
+            <span class="track-added-by">añadida por {{ track.addedBy }}</span>
+          </li>
+        </ul>
+        
+        <div *ngIf="!(playlist$ | async)?.length" class="empty-playlist">
+          <p>🎵 La playlist está vacía</p>
+          <p *ngIf="canAddTracks$ | async" class="empty-hint">
+            ¡Sé el primero en añadir una canción!
+          </p>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
