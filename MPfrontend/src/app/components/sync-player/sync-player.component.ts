@@ -3,7 +3,6 @@ import { Subscription, map } from 'rxjs';
 import { AsyncPipe, CommonModule, NgIf } from '@angular/common';
 import { SyncOrchestratorService } from '../../services/sync-orchestrator.service';
 import { StateService } from '../../services/state.service';
-import { MessageHandlerService } from '../../services/message-handler.service';
 
 @Component({
   standalone: true,
@@ -16,7 +15,6 @@ export class SyncPlayerComponent implements OnInit, OnDestroy {
   // ✅ INYECCIÓN CORREGIDA: Usar inject() para mejor testabilidad
   private syncOrchestrator = inject(SyncOrchestratorService);
   private state = inject(StateService);
-  private messageHandler = inject(MessageHandlerService);
   
   private subs = new Subscription();
 
@@ -53,17 +51,6 @@ export class SyncPlayerComponent implements OnInit, OnDestroy {
    * Configura todas las suscripciones
    */
   private setupSubscriptions(): void {
-    // ✅ SUSCRIPCIÓN CORREGIDA: Usar MessageHandlerService para mensajes de playback
-    this.subs.add(
-      this.messageHandler.playbackMessages.subscribe(msg => {
-        if (msg.senderId === this.senderId) return; // Ignorar mensajes propios
-        
-        const action = String(msg.action ?? '').toLowerCase();
-        if (action === 'play') this.isPlaying = true;
-        else if (action === 'pause') this.isPlaying = false;
-        // 'seek' se maneja automáticamente a través del StateService
-      })
-    );
 
     // ✅ SUSCRIPCIÓN MEJORADA: Sincronizar estado de reproducción
     this.subs.add(
