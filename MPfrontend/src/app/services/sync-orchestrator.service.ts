@@ -301,12 +301,14 @@ export class SyncOrchestratorService implements OnDestroy {
     });
 
     // Enviar mensaje de autenticación
-    await this.sendPayload({
-      type: 'auth',
-      roomId: roomId,
-      senderId: senderId,
-      data: { isHost: this.state.snapshot.isHost }
-    }, true);
+    setTimeout(() => {
+      this.sendPayload({
+        type: 'auth',
+        roomId: roomId,
+        senderId: senderId,
+        data: { isHost: this.state.snapshot.isHost }
+      }, true);
+    }, 100);
   }
 
   private async sendPayload(payload: any, waitAck = true, timeoutMs = 4000): Promise<boolean> {
