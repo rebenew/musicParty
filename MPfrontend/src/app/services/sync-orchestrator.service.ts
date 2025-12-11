@@ -3,8 +3,6 @@ import { Subject, Subscription } from 'rxjs';
 import { WebsocketService } from './websocket.service';
 import { RoomService } from './room.service';
 import { StateService } from './state.service';
-import { ExtensionBridgeService } from './extension-bridge.service';
-import { MessageHandlerService } from './message-handler.service';
 
 /**
  * Servicio orquestador principal - Coordina todos los servicios de sincronización
@@ -24,8 +22,6 @@ export class SyncOrchestratorService implements OnDestroy {
 
   // Subscripciones
   private wsMessageSub?: Subscription;
-  private extensionMessageSub?: Subscription;
-  private systemMessagesSub?: Subscription;
 
   private readonly TIMEOUTS = {
     CONNECTION: 8000,
@@ -36,9 +32,7 @@ export class SyncOrchestratorService implements OnDestroy {
   constructor(
     private wsService: WebsocketService,
     private roomApi: RoomService,
-    private state: StateService,
-    private extensionBridge: ExtensionBridgeService,
-    private messageHandler: MessageHandlerService
+    private state: StateService
   ) {
     this.setupMessageHandling();
   }
@@ -63,19 +57,9 @@ export class SyncOrchestratorService implements OnDestroy {
       this.roomId = normalized;
       this.senderId = senderId;
 
-      // Decidir método de conexión
-      if (this.extensionBridge.isChromeAvailable()) {
-        await this.extensionBridge.connect(normalized, senderId);
-        this.usingBackground = true;
-      } else {
-        await this.startWithWebSocket(normalized, senderId);
-        this.usingBackground = false;
-      }
+      await this.startWithWebSocket(normalized, senderId);
+      this.usingBackground = false;
 
-      // Sincronizar estado inicial si es host
-      if (await this.isCurrentUserHost()) {
-        await this.syncCurrentPlayerState();
-      }
 
       this.connectionStateSubject.next('connected');
       this.state.patch({ roomId: normalized, senderId, isConnected: true });
@@ -146,17 +130,11 @@ export class SyncOrchestratorService implements OnDestroy {
    */
   async guestJoin(roomId: string, guestSenderId: string): Promise<void> {
     try {
-      const room = await this.roomApi.getRoom(roomId);
+      await this.roomApi.getRoom(roomId);
       await this.start(roomId, guestSenderId);
       await this.refreshPlaylist();
       
-      this.state.patch({
-        isHost: false,
-        allowGuestsAddTracks: room.allowGuestsEditQueue,
-        allowGuestsControl: true
-      });
-      
-      await this.requestCurrentState();
+      this.state.patch({ isHost: false });
       
     } catch (error: any) {
       this.errorsSubject.next(`Error uniéndose a sala: ${error.message}`);
@@ -188,13 +166,7 @@ export class SyncOrchestratorService implements OnDestroy {
         timestamp: Date.now()
       };
 
-      const success = await this.sendPayload(msg, true, this.TIMEOUTS.ACTION);
-      
-      if (success && this.extensionBridge.isChromeAvailable()) {
-        await this.extensionBridge.controlLocalPlayback(action, position);
-      }
-      
-      return success;
+      return this.sendPayload(msg, true, this.TIMEOUTS.ACTION);
       
     } catch (error: any) {
       this.errorsSubject.next(`Error enviando acción: ${error.message}`);
@@ -284,11 +256,7 @@ export class SyncOrchestratorService implements OnDestroy {
    * Detiene y limpia recursos
    */
   stop(): void {
-    if (this.usingBackground) {
-      this.extensionBridge.disconnect(this.roomId!, this.senderId!);
-    } else {
-      this.wsService.disconnect();
-    }
+    this.wsService.disconnect();
 
     this.cleanupSubscriptions();
 
@@ -315,7 +283,7 @@ export class SyncOrchestratorService implements OnDestroy {
   private async startWithWebSocket(roomId: string, senderId: string): Promise<void> {
     this.wsService.connect(roomId, senderId);
 
-    return new Promise<void>((resolve, reject) => {
+    await new Promise<void>((resolve, reject) => {
       const sub = this.wsService.status.subscribe(s => {
         if (s === 'OPEN') {
           sub.unsubscribe();
@@ -331,6 +299,16 @@ export class SyncOrchestratorService implements OnDestroy {
         reject(new Error('Timeout de conexión WebSocket'));
       }, this.TIMEOUTS.CONNECTION);
     });
+
+    // Enviar mensaje de autenticación
+    setTimeout(() => {
+      this.sendPayload({
+        type: 'auth',
+        roomId: roomId,
+        senderId: senderId,
+        data: { isHost: this.state.snapshot.isHost }
+      }, true);
+    }, 100);
   }
 
   private async sendPayload(payload: any, waitAck = true, timeoutMs = 4000): Promise<boolean> {
@@ -340,20 +318,16 @@ export class SyncOrchestratorService implements OnDestroy {
     if (!payload.senderId && this.senderId) payload.senderId = this.senderId;
     if (!payload.timestamp) payload.timestamp = Date.now();
 
-    if (this.usingBackground) {
-      return this.extensionBridge.sendWithAck(payload, timeoutMs);
-    } else {
-      if (waitAck) {
-        try {
-          const ack = await this.wsService.sendWithAck(payload, timeoutMs);
-          return Boolean(ack && ack.success);
-        } catch (e) {
-          return false;
-        }
-      } else {
-        this.wsService.sendObject(payload);
-        return true;
+    if (waitAck) {
+      try {
+        const ack = await this.wsService.sendWithAck(payload, timeoutMs);
+        return Boolean(ack && ack.success);
+      } catch (e) {
+        return false;
       }
+    } else {
+      this.wsService.sendObject(payload);
+      return true;
     }
   }
 
@@ -368,75 +342,43 @@ export class SyncOrchestratorService implements OnDestroy {
     }
   }
 
-  private async syncCurrentPlayerState(): Promise<void> {
-    if (!this.extensionBridge.isChromeAvailable() || !(await this.isCurrentUserHost())) return;
-
-    try {
-      const state = await this.extensionBridge.getPlayerState();
-      if (state) {
-        await this.sendPayload({
-          type: 'playback',
-          subType: 'syncState',
-          roomId: this.roomId,
-          senderId: this.senderId,
-          data: state
-        }, false);
-      }
-    } catch (error) {
-      console.warn('No se pudo sincronizar estado actual:', error);
-    }
-  }
-
-  private async requestCurrentState(): Promise<void> {
-    if (!this.roomId) return;
-
-    try {
-      await this.sendPayload({
-        type: 'system',
-        subType: 'requestState',
-        roomId: this.roomId,
-        senderId: this.senderId
-      }, false);
-    } catch (error) {
-      console.warn('No se pudo solicitar estado actual:', error);
-    }
+  private cleanupSubscriptions(): void {
+    this.wsMessageSub?.unsubscribe();
   }
 
   private setupMessageHandling(): void {
-    // Escuchar mensajes de WebSocket
     this.wsMessageSub = this.wsService.messages.subscribe(msg => {
-      this.messageHandler.handleMessage(msg);
-    });
-
-    // Escuchar mensajes de extensión
-    this.extensionMessageSub = this.extensionBridge.onMessage.subscribe(msg => {
-      this.messageHandler.handleMessage(msg);
-    });
-
-    // Manejar eventos del sistema que requieren acción
-    this.systemMessagesSub = this.messageHandler.systemMessages.subscribe(msg => {
-      this.handleSystemEvent(msg);
+      this.handleIncomingMessage(msg);
     });
   }
 
-  private handleSystemEvent(msg: any): void {
+  private handleIncomingMessage(msg: any): void {
     switch (msg.type) {
-      case 'playlistUpdate':
-        this.refreshPlaylist().catch(console.warn);
+      case 'roomState':
+        this.state.patch({
+          isHost: msg.data.isHost,
+          allowGuestsAddTracks: msg.data.allowGuestsAddTracks,
+          allowGuestsControl: msg.data.allowGuestsControl,
+          playlist: msg.data.playlist,
+          users: msg.data.users
+        });
         break;
-      case 'navigate':
-        this.extensionBridge.openUrl(msg.url);
+      case 'playback':
+        this.state.updatePlaybackState(msg.data.isPlaying, msg.data.positionMs);
         break;
-      case 'roomClosed':
-        this.stop();
+      case 'playlist':
+        if (msg.subType === 'update') {
+          this.state.setPlaylist(msg.data.playlist);
+        }
+        break;
+      case 'userUpdate':
+        if (msg.subType === 'join') {
+          this.state.addUser(msg.data.senderId);
+        } else if (msg.subType === 'leave') {
+          this.state.removeUser(msg.data.senderId);
+        }
         break;
     }
-  }
-
-  private cleanupSubscriptions(): void {
-    this.wsMessageSub?.unsubscribe();
-    this.extensionMessageSub?.unsubscribe();
-    this.systemMessagesSub?.unsubscribe();
   }
 
   private static normalizeRoomId(raw?: string | null): string | null {

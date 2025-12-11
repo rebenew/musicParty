@@ -1,29 +1,22 @@
 🎧 MusicParty – Plataforma de Sincronización Musical en Tiempo Real
 
-Sincroniza YouTube Music entre múltiples usuarios con WebSockets, cola compartida y control colaborativo.
+Sincroniza la música entre múltiples usuarios con WebSockets, cola compartida y control colaborativo.
 
  -- Descripción General -- 
 
 MusicParty es una aplicación FullStack diseñada para crear salas de reproducción compartida donde múltiples usuarios pueden:
 
  * Reproducir una misma canción al mismo tiempo (sincronización real).
-
  * Agregar canciones a una cola compartida.
-
  * Seguir el estado del host (tiempo, canción actual, cola, etc.).
+ * Usar una única interfaz de usuario web (frontend) para controlarlo todo.
 
- * Usar una extensión de navegador o una UI web (frontend) para controlarlo.
-
-El backend está construido con Spring Boot + WebSocket, y el frontend consiste en:
-
- * Una extensión de navegador que detecta cambios en YouTube Music.
-
- * Una UI web para invitados/host (en proceso de optimización).
+El backend está construido con Spring Boot + WebSocket, y el frontend es una aplicación web moderna y optimizada.
  
  -- Arquitectura General --
 
  ┌─────────────────────┐
-│   Usuario Invitado   │
+│      Usuario         │
 │   (Frontend Web)     │
 └──────────┬───────────┘
            │ WebSocket
@@ -36,12 +29,12 @@ El backend está construido con Spring Boot + WebSocket, y el frontend consiste 
            │ Broadcast
            ▼
 ┌─────────────────────┐
-│       Host          │
-│ Extensión + YTMusic │
+│    Otros Usuarios    │
+│   (Frontend Web)     │
 └─────────────────────┘
 
 ✔ El host es la fuente de verdad.
-✔ Los guests ven la cola y reproducción sincronizada.
+✔ Los invitados ven la cola y la reproducción sincronizada.
 ✔ El servidor actúa como coordinador que refleja el estado real.
 
 -- Estado actual del proyecto (2025)--
@@ -49,117 +42,52 @@ El backend está construido con Spring Boot + WebSocket, y el frontend consiste 
 ✔ Backend funcional con:
 
 * WebSocket estable (/ws/music-sync)
-
 * Manejo de salas dinámicas (RoomSession)
-
 * RoomSessionManager con:
-
  * timers
-
  * sincronización de playback
-
  * broadcast general a todos los clients
-
 * Shadow playlist del host en el servidor
-
-* Guests agregan canciones sin necesidad de request manual
+* Los invitados agregan canciones sin necesidad de request manual
 
 ✔ Frontend (UI web)
 
-* Existe y funciona, pero se está optimizando:
+* Interfaz de usuario unificada y optimizada para hosts e invitados.
+ * Visualización mejorada y más responsiva.
+ * Flujo de usuario simplificado.
 
- * Mejor visualización
+🧑‍🤝‍🧑 Los invitados agregan canciones sin request manual
 
- * Mejor flujo para invitados
+Sistema implementado:
 
- * Más responsivo
-
- ✔ Extensión Chrome / Firefox
-
- Detecta automáticamente:
-
- * Canción actual
-
- * Porcentaje / tiempo de reproducción
-
- * Cambios en la cola
-
- * Siguiente canción
-
- * Pausas / skips
-
-Y envía la información al Backend vía WS.
-
-Mirror Mode (En Desarrollo)
-
-El objetivo final:
-
-- El host se vuelve la fuente absoluta de verdad.
-
-La cola real de YouTube Music del host es:
-
-✔ Leída
-✔ Sincronizada
-✔ Convertida en una shadow playlist
-✔ Enviada como broadcast a todos los invitados
-
-🔄 Cuando el host cambie su cola:
-
-* El backend recibirá un sync_queue
-
-* Actualizará la shadow interna
-
-* Enviará un broadcast completo con el nuevo estado
-
-Este modo permitirá sincronización EXACTA con YT Music.
-
-🧑‍🤝‍🧑 Guests agregan canciones sin request manual
-
-Nuevo sistema implementado:
-
-🔓 Guests tienen permisos inmediatos para agregar canciones:
-
-Ya NO se requiere enviar add_track_request al host.
-
-La extensión/Frontend permite agregar directo.
-
+🔓 Los invitados tienen permisos inmediatos para agregar canciones.
+El Frontend permite agregar directamente.
 El servidor actualiza la cola global.
-
-El host recibe el update automáticamente.
-
-Este sistema se integrará totalmente en el Mirror Mode final.
+El host recibe la actualización automáticamente.
 
 🧭 Flujo de Sincronización
-1. Host abre sala
+1. El host abre una sala
 
 RoomSession creada → Broadcast inicial.
 
-2. Extensión envía cambios
+2. Los usuarios envían cambios
 
 * Canción actual
-
 * Tiempo
-
-* Cola real (mirror mode)
-
 * Estado de reproducción
 
-3. Guests se conectan
+3. Los invitados se conectan
 
 Reciben:
 
 * Cola completa
-
 * Playback actual
-
 * Estado del host
 
-4. Guests agregan canción
+4. Los invitados agregan una canción
 
 Inmediatamente:
 
-* Se agrega a la shadow playlist del server
-
-* Broadcast a todos
-
-* Host actualiza su cola (manual o futura automatización DOM)
+* Se agrega a la shadow playlist del servidor.
+* Se transmite a todos.
+* El host actualiza su cola (manual o futura automatización DOM).
